@@ -238,6 +238,7 @@ class KeyMintSecurityLevelInterceptor(
             CreateOperationResponse().apply {
                 iOperation = operationBinder
                 operationChallenge = null
+                parameters = softwareOperation.beginParameters
             }
 
         return InterceptorUtils.createTypedObjectReply(response)
