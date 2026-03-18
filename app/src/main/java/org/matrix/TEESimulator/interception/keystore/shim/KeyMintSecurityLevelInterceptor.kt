@@ -3,6 +3,7 @@ package org.matrix.TEESimulator.interception.keystore.shim
 import android.hardware.security.keymint.KeyOrigin
 import android.hardware.security.keymint.KeyParameter
 import android.hardware.security.keymint.KeyParameterValue
+import android.hardware.security.keymint.SecurityLevel
 import android.hardware.security.keymint.Tag
 import android.os.IBinder
 import android.os.Parcel
@@ -498,8 +499,19 @@ private fun KeyMintAttestation.toAuthorizations(
         createAuth(Tag.CREATION_DATETIME, KeyParameterValue.dateTime(System.currentTimeMillis()))
     )
 
+    // AOSP keystore2 adds USER_ID at SecurityLevel.SOFTWARE (not TEE), since the
+    // application UID is a software concept. See AOSP security_level.rs store_new_key().
     // AOSP class android.os.UserHandle: PER_USER_RANGE = 100000;
-    authList.add(createAuth(Tag.USER_ID, KeyParameterValue.integer(callingUid / 100000)))
+    authList.add(
+        Authorization().apply {
+            this.keyParameter =
+                KeyParameter().apply {
+                    this.tag = Tag.USER_ID
+                    this.value = KeyParameterValue.integer(callingUid / 100000)
+                }
+            this.securityLevel = SecurityLevel.SOFTWARE
+        }
+    )
 
     return authList.toTypedArray()
 }
