@@ -5,6 +5,7 @@ import android.hardware.security.keymint.SecurityLevel
 import android.os.Build
 import android.os.IBinder
 import android.os.Parcel
+import android.system.keystore2.Domain
 import android.system.keystore2.IKeystoreService
 import android.system.keystore2.KeyDescriptor
 import android.system.keystore2.KeyEntryResponse
@@ -357,11 +358,26 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
     private fun handleUpdateSubcomponent(callingUid: Int, data: Parcel): TransactionResult {
         data.enforceInterface(IKeystoreService.DESCRIPTOR)
         val descriptor = data.readTypedObject(KeyDescriptor.CREATOR)
+            ?: return TransactionResult.ContinueAndSkipPost
+
+        // Resolve by nspace (KEY_ID) or alias (APP), same as createOperation.
         val generatedKeyInfo =
-            KeyMintSecurityLevelInterceptor.findGeneratedKeyByKeyId(callingUid, descriptor?.nspace)
+            when (descriptor.domain) {
+                Domain.KEY_ID ->
+                    KeyMintSecurityLevelInterceptor.findGeneratedKeyByKeyId(
+                        callingUid,
+                        descriptor.nspace,
+                    )
+                Domain.APP ->
+                    descriptor.alias?.let {
+                        KeyMintSecurityLevelInterceptor.generatedKeys[KeyIdentifier(callingUid, it)]
+                    }
+                else -> null
+            }
+
         if (generatedKeyInfo == null) {
             // Hardware key: mark so getKeyEntry skips cert re-patching.
-            descriptor?.alias?.let { userUpdatedKeys.add(KeyIdentifier(callingUid, it)) }
+            descriptor.alias?.let { userUpdatedKeys.add(KeyIdentifier(callingUid, it)) }
             return TransactionResult.ContinueAndSkipPost
         }
 
