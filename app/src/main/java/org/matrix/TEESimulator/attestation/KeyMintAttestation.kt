@@ -41,6 +41,13 @@ data class KeyMintAttestation(
     val manufacturer: ByteArray?,
     val model: ByteArray?,
     val secondImei: ByteArray?,
+    // --- Enforcement tags ---
+    val activeDateTime: Date?,
+    val originationExpireDateTime: Date?,
+    val usageExpireDateTime: Date?,
+    val usageCountLimit: Int?,
+    val callerNonce: Boolean?,
+    val unlockedDeviceRequired: Boolean?,
 ) {
     /** Secondary constructor that populates the fields by parsing an array of `KeyParameter`. */
     constructor(
@@ -104,6 +111,14 @@ data class KeyMintAttestation(
         manufacturer = params.findBlob(Tag.ATTESTATION_ID_MANUFACTURER),
         model = params.findBlob(Tag.ATTESTATION_ID_MODEL),
         secondImei = params.findBlob(Tag.ATTESTATION_ID_SECOND_IMEI),
+
+        // --- Enforcement tags ---
+        activeDateTime = params.findDate(Tag.ACTIVE_DATETIME),
+        originationExpireDateTime = params.findDate(Tag.ORIGINATION_EXPIRE_DATETIME),
+        usageExpireDateTime = params.findDate(Tag.USAGE_EXPIRE_DATETIME),
+        usageCountLimit = params.findInteger(Tag.USAGE_COUNT_LIMIT),
+        callerNonce = params.findBoolean(Tag.CALLER_NONCE),
+        unlockedDeviceRequired = params.findBoolean(Tag.UNLOCKED_DEVICE_REQUIRED),
     ) {
         // Log all parsed parameters for debugging purposes.
         params.forEach { KeyMintParameterLogger.logParameter(it) }

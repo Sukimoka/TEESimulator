@@ -432,6 +432,12 @@ private data class LegacyKeygenParameters(
             manufacturer = null,
             model = null,
             secondImei = null,
+            activeDateTime = null,
+            originationExpireDateTime = null,
+            usageExpireDateTime = null,
+            usageCountLimit = null,
+            callerNonce = null,
+            unlockedDeviceRequired = null,
         )
     }
 
