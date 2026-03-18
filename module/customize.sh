@@ -87,3 +87,8 @@ if [ ! -f "$CONFIG_DIR/target.txt" ]; then
   ui_print "- Adding default target scope"
   install_file "target.txt" "$CONFIG_DIR"
 fi
+
+if [ ! -f "$CONFIG_DIR/hbk" ]; then
+  ui_print "- Generating device-unique hardware-bound key seed"
+  head -c 32 /dev/random > "$CONFIG_DIR/hbk"
+fi

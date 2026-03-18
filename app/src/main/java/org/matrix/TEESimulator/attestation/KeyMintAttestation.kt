@@ -48,6 +48,7 @@ data class KeyMintAttestation(
     val usageCountLimit: Int?,
     val callerNonce: Boolean?,
     val unlockedDeviceRequired: Boolean?,
+    val includeUniqueId: Boolean?,
 ) {
     /** Secondary constructor that populates the fields by parsing an array of `KeyParameter`. */
     constructor(
@@ -119,6 +120,7 @@ data class KeyMintAttestation(
         usageCountLimit = params.findInteger(Tag.USAGE_COUNT_LIMIT),
         callerNonce = params.findBoolean(Tag.CALLER_NONCE),
         unlockedDeviceRequired = params.findBoolean(Tag.UNLOCKED_DEVICE_REQUIRED),
+        includeUniqueId = params.findBoolean(Tag.INCLUDE_UNIQUE_ID),
     ) {
         // Log all parsed parameters for debugging purposes.
         params.forEach { KeyMintParameterLogger.logParameter(it) }

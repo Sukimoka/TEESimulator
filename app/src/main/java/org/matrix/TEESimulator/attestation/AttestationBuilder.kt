@@ -2,8 +2,11 @@ package org.matrix.TEESimulator.attestation
 
 import android.content.pm.PackageManager
 import android.os.Build
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import org.bouncycastle.asn1.ASN1Boolean
 import org.bouncycastle.asn1.ASN1Encodable
 import org.bouncycastle.asn1.ASN1Enumerated
@@ -132,8 +135,16 @@ object AttestationBuilder {
         uid: Int,
         securityLevel: Int,
     ): ASN1Sequence {
+        val creationTime = System.currentTimeMillis()
         val teeEnforced = buildTeeEnforcedList(params, uid, securityLevel)
-        val softwareEnforced = buildSoftwareEnforcedList(params, uid, securityLevel)
+        val softwareEnforced = buildSoftwareEnforcedList(params, uid, securityLevel, creationTime)
+
+        val uniqueId =
+            if (params.includeUniqueId == true && params.attestationChallenge != null) {
+                computeUniqueId(creationTime, createApplicationId(uid).octets)
+            } else {
+                ByteArray(0)
+            }
 
         val fields =
             arrayOf(
@@ -146,11 +157,47 @@ object AttestationBuilder {
                 ), // keymasterVersion
                 ASN1Enumerated(securityLevel), // keymasterSecurityLevel
                 DEROctetString(params.attestationChallenge ?: ByteArray(0)), // attestationChallenge
-                DEROctetString(ByteArray(0)), // uniqueId
+                DEROctetString(uniqueId),
                 softwareEnforced,
                 teeEnforced,
             )
         return DERSequence(fields)
+    }
+
+    /**
+     * Computes the unique ID per the KeyMint HAL spec:
+     * HMAC-SHA256(T || C || R, HBK) truncated to 128 bits.
+     *
+     * T = temporal counter (creationTime / 2592000000, i.e. 30-day periods since epoch)
+     * C = DER-encoded ATTESTATION_APPLICATION_ID
+     * R = 0x00 (no factory reset since ID rotation)
+     * HBK = device-unique secret generated once during module installation
+     */
+    private fun computeUniqueId(creationTimeMs: Long, aaidDer: ByteArray): ByteArray {
+        val temporalCounter = creationTimeMs / 2592000000L
+
+        val message =
+            ByteBuffer.allocate(8 + aaidDer.size + 1)
+                .putLong(temporalCounter)
+                .put(aaidDer)
+                .put(0x00) // RESET_SINCE_ID_ROTATION = false
+                .array()
+
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(hbk, "HmacSHA256"))
+        return mac.doFinal(message).copyOf(16)
+    }
+
+    /** Device-unique key seed, generated once at module installation. */
+    private val hbk: ByteArray by lazy {
+        val file = java.io.File(ConfigurationManager.CONFIG_PATH, "hbk")
+        if (file.exists() && file.length() == 32L) {
+            file.readBytes()
+        } else {
+            // Fallback: generate in-memory (won't persist across reboots)
+            SystemLogger.warning("hbk not found, generating ephemeral HBK.")
+            ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        }
     }
 
     /** Builds the `TeeEnforced` authorization list. These are properties the TEE "guarantees". */
@@ -376,6 +423,7 @@ object AttestationBuilder {
         params: KeyMintAttestation,
         uid: Int,
         securityLevel: Int,
+        creationTimeMs: Long = System.currentTimeMillis(),
     ): DERSequence {
         val list = mutableListOf<ASN1Encodable>()
 
@@ -383,7 +431,7 @@ object AttestationBuilder {
             DERTaggedObject(
                 true,
                 AttestationConstants.TAG_CREATION_DATETIME,
-                ASN1Integer(System.currentTimeMillis()),
+                ASN1Integer(creationTimeMs),
             )
         )
 
