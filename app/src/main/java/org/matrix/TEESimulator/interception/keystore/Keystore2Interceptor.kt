@@ -302,6 +302,11 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
 
                     CertificateHelper.updateCertificateChain(response.metadata, finalChain)
                         .getOrThrow()
+                    response.metadata.authorizations =
+                        InterceptorUtils.patchAuthorizations(
+                            response.metadata.authorizations,
+                            callingUid,
+                        )
 
                     return InterceptorUtils.createTypedObjectReply(response)
                 }

@@ -163,6 +163,8 @@ class KeyMintSecurityLevelInterceptor(
                 val key = metadata.key!!
                 val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
                 CertificateHelper.updateCertificateChain(metadata, newChain).getOrThrow()
+                metadata.authorizations =
+                    InterceptorUtils.patchAuthorizations(metadata.authorizations, callingUid)
 
                 // We must clean up cached generated keys before storing the patched chain
                 cleanupKeyData(keyId)
