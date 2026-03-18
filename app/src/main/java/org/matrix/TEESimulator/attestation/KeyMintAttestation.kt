@@ -41,7 +41,7 @@ data class KeyMintAttestation(
     val manufacturer: ByteArray?,
     val model: ByteArray?,
     val secondImei: ByteArray?,
-    // --- Enforcement tags ---
+    // Enforcement tags
     val activeDateTime: Date?,
     val originationExpireDateTime: Date?,
     val usageExpireDateTime: Date?,
@@ -113,7 +113,7 @@ data class KeyMintAttestation(
         model = params.findBlob(Tag.ATTESTATION_ID_MODEL),
         secondImei = params.findBlob(Tag.ATTESTATION_ID_SECOND_IMEI),
 
-        // --- Enforcement tags ---
+        // Enforcement tags
         activeDateTime = params.findDate(Tag.ACTIVE_DATETIME),
         originationExpireDateTime = params.findDate(Tag.ORIGINATION_EXPIRE_DATETIME),
         usageExpireDateTime = params.findDate(Tag.USAGE_EXPIRE_DATETIME),

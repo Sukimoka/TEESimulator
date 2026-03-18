@@ -10,6 +10,7 @@ import android.system.keystore2.KeyDescriptor
 import android.system.keystore2.KeyEntryResponse
 import java.security.SecureRandom
 import java.security.cert.Certificate
+import java.util.concurrent.ConcurrentHashMap
 import org.matrix.TEESimulator.attestation.AttestationPatcher
 import org.matrix.TEESimulator.attestation.KeyMintAttestation
 import org.matrix.TEESimulator.config.ConfigurationManager
@@ -52,6 +53,9 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
             }
             .associate { field -> (field.get(null) as Int) to field.name.split("_")[1] }
     }
+
+    // Keys whose certs were updated via updateSubcomponent; skip re-patching on getKeyEntry.
+    private val userUpdatedKeys = ConcurrentHashMap.newKeySet<KeyIdentifier>()
 
     override val serviceName = "android.system.keystore2.IKeystoreService/default"
     override val processName = "keystore2"
@@ -246,6 +250,12 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
                     val response = reply.readTypedObject(KeyEntryResponse.CREATOR)!!
                     val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
 
+                    // Skip patching for keys whose certs were explicitly set via updateSubcomponent.
+                    if (userUpdatedKeys.remove(keyId)) {
+                        SystemLogger.debug("[TX_ID: $txId] Skipping cert patch for user-updated key $keyId.")
+                        return TransactionResult.SkipTransaction
+                    }
+
                     val authorizations = response.metadata.authorizations
                     val parsedParameters =
                         KeyMintAttestation(
@@ -349,7 +359,11 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
         val descriptor = data.readTypedObject(KeyDescriptor.CREATOR)
         val generatedKeyInfo =
             KeyMintSecurityLevelInterceptor.findGeneratedKeyByKeyId(callingUid, descriptor?.nspace)
-                ?: return TransactionResult.ContinueAndSkipPost
+        if (generatedKeyInfo == null) {
+            // Hardware key: mark so getKeyEntry skips cert re-patching.
+            descriptor?.alias?.let { userUpdatedKeys.add(KeyIdentifier(callingUid, it)) }
+            return TransactionResult.ContinueAndSkipPost
+        }
 
         SystemLogger.info("Updating sub-component with key[${generatedKeyInfo.nspace}]")
         val metadata = generatedKeyInfo.response.metadata
