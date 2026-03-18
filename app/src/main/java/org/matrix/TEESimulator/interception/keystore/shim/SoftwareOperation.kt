@@ -24,7 +24,7 @@ import org.matrix.TEESimulator.logging.SystemLogger
  * AOSP keystore2 error codes used in ServiceSpecificException. Negative values are KeyMint
  * ErrorCode constants; positive values are Keystore2 ResponseCode constants. See AOSP error.rs.
  */
-private object KeystoreErrorCode {
+internal object KeystoreErrorCode {
     /** KeyMint ErrorCode::INVALID_OPERATION_HANDLE */
     const val INVALID_OPERATION_HANDLE = -28
 
@@ -33,6 +33,9 @@ private object KeystoreErrorCode {
 
     /** KeyMint ErrorCode::UNSUPPORTED_PURPOSE */
     const val UNSUPPORTED_PURPOSE = -2
+
+    /** KeyMint ErrorCode::INCOMPATIBLE_PURPOSE */
+    const val INCOMPATIBLE_PURPOSE = -3
 
     /** Keystore2 ResponseCode::SYSTEM_ERROR */
     const val SYSTEM_ERROR = 4

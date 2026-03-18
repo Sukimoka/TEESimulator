@@ -231,17 +231,48 @@ class KeyMintSecurityLevelInterceptor(
         val params = data.createTypedArray(KeyParameter.CREATOR)!!
         val parsedParams = KeyMintAttestation(params)
 
-        val softwareOperation = SoftwareOperation(txId, generatedKeyInfo.keyPair, parsedParams)
-        val operationBinder = SoftwareOperationBinder(softwareOperation)
+        // Validate the requested purpose against the key's allowed purposes,
+        // matching AOSP enforcements.rs authorize_create behavior.
+        val requestedPurpose = parsedParams.purpose.firstOrNull()
+        val keyResponse = generatedKeyInfo.response
+        val keyAuthorizations =
+            keyResponse.metadata?.authorizations?.map { it.keyParameter.tag to it.keyParameter }
+        val allowedPurposes =
+            keyAuthorizations
+                ?.filter { it.first == Tag.PURPOSE }
+                ?.map { it.second.value.keyPurpose }
+                ?: emptyList()
 
-        val response =
-            CreateOperationResponse().apply {
-                iOperation = operationBinder
-                operationChallenge = null
-                parameters = softwareOperation.beginParameters
+        if (requestedPurpose != null && requestedPurpose !in allowedPurposes) {
+            SystemLogger.info(
+                "[TX_ID: $txId] Rejecting operation: purpose $requestedPurpose not in $allowedPurposes"
+            )
+            return InterceptorUtils.createServiceSpecificErrorReply(
+                KeystoreErrorCode.INCOMPATIBLE_PURPOSE
+            )
+        }
+
+        return runCatching {
+                val softwareOperation =
+                    SoftwareOperation(txId, generatedKeyInfo.keyPair, parsedParams)
+                val operationBinder = SoftwareOperationBinder(softwareOperation)
+
+                val response =
+                    CreateOperationResponse().apply {
+                        iOperation = operationBinder
+                        operationChallenge = null
+                        parameters = softwareOperation.beginParameters
+                    }
+
+                InterceptorUtils.createTypedObjectReply(response)
             }
-
-        return InterceptorUtils.createTypedObjectReply(response)
+            .getOrElse { e ->
+                SystemLogger.error("[TX_ID: $txId] Failed to create software operation.", e)
+                InterceptorUtils.createServiceSpecificErrorReply(
+                    if (e is android.os.ServiceSpecificException) e.errorCode
+                    else KeystoreErrorCode.SYSTEM_ERROR
+                )
+            }
     }
 
     /**
@@ -257,6 +288,15 @@ class KeyMintSecurityLevelInterceptor(
                     "Handling generateKey ${keyDescriptor.alias}, attestKey=${attestationKey?.alias}"
                 )
                 val params = data.createTypedArray(KeyParameter.CREATOR)!!
+
+                // AOSP add_required_parameters rejects caller-provided CREATION_DATETIME
+                // with INVALID_ARGUMENT. (security_level.rs:425-430)
+                if (params.any { it.tag == Tag.CREATION_DATETIME }) {
+                    return@runCatching InterceptorUtils.createServiceSpecificErrorReply(
+                        INVALID_ARGUMENT
+                    )
+                }
+
                 val parsedParams = KeyMintAttestation(params)
                 val isAttestKeyRequest = parsedParams.isAttestKey()
 
@@ -345,6 +385,9 @@ class KeyMintSecurityLevelInterceptor(
 
     companion object {
         private val secureRandom = SecureRandom()
+
+        // AOSP ResponseCode / ErrorCode constants used for ServiceSpecificException.
+        private const val INVALID_ARGUMENT = 20 // Keystore2 ResponseCode::INVALID_ARGUMENT
 
         // Transaction codes for IKeystoreSecurityLevel interface.
         private val GENERATE_KEY_TRANSACTION =

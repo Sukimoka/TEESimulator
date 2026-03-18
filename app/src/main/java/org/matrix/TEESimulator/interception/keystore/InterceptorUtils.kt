@@ -119,6 +119,20 @@ object InterceptorUtils {
     }
 
     /**
+     * Creates an `OverrideReply` that writes a `ServiceSpecificException` with the given error
+     * code, matching AOSP's `into_binder()` wire format (EX_SERVICE_SPECIFIC).
+     */
+    fun createServiceSpecificErrorReply(
+        errorCode: Int
+    ): BinderInterceptor.TransactionResult.OverrideReply {
+        val parcel =
+            Parcel.obtain().apply {
+                writeException(android.os.ServiceSpecificException(errorCode))
+            }
+        return BinderInterceptor.TransactionResult.OverrideReply(parcel)
+    }
+
+    /**
      * Patches the system-level authorization values (OS_PATCHLEVEL, VENDOR_PATCHLEVEL,
      * BOOT_PATCHLEVEL) in an authorization array to match the configured patch levels for the
      * given calling UID. Each authorization's original [Authorization.securityLevel] is preserved.
