@@ -41,7 +41,25 @@ internal object KeystoreErrorCode {
     const val SYSTEM_ERROR = 4
 
     /** Keystore2 ResponseCode::TOO_MUCH_DATA */
-    const val TOO_MUCH_DATA = 16
+    const val TOO_MUCH_DATA = 21
+
+    /** KeyMint ErrorCode::KEY_EXPIRED */
+    const val KEY_EXPIRED = -25
+
+    /** KeyMint ErrorCode::KEY_NOT_YET_VALID */
+    const val KEY_NOT_YET_VALID = -24
+
+    /** KeyMint ErrorCode::CALLER_NONCE_PROHIBITED */
+    const val CALLER_NONCE_PROHIBITED = -55
+
+    /** KeyMint ErrorCode::INVALID_ARGUMENT */
+    const val INVALID_ARGUMENT = -38
+
+    /** Keystore2 ResponseCode::PERMISSION_DENIED */
+    const val PERMISSION_DENIED = 6
+
+    /** Keystore2 ResponseCode::KEY_NOT_FOUND */
+    const val KEY_NOT_FOUND = 7
 }
 
 // A sealed interface to represent the different cryptographic operations we can perform.
@@ -210,7 +228,13 @@ private class CipherPrimitive(
  * [ServiceSpecificException] with [KeystoreErrorCode.INVALID_OPERATION_HANDLE], matching AOSP
  * keystore2 behavior (operation.rs check_active).
  */
-class SoftwareOperation(private val txId: Long, keyPair: KeyPair, params: KeyMintAttestation) {
+class SoftwareOperation(
+    private val txId: Long,
+    keyPair: KeyPair,
+    params: KeyMintAttestation,
+    /** Called after a successful finish(), used for USAGE_COUNT_LIMIT enforcement. */
+    var onFinishCallback: (() -> Unit)? = null,
+) {
     private val primitive: CryptoPrimitive
 
     @Volatile private var finalized = false
@@ -283,6 +307,7 @@ class SoftwareOperation(private val txId: Long, keyPair: KeyPair, params: KeyMin
         try {
             val result = primitive.finish(data, signature)
             SystemLogger.info("[SoftwareOp TX_ID: $txId] Finished operation successfully.")
+            onFinishCallback?.invoke()
             return result
         } catch (e: ServiceSpecificException) {
             throw e
