@@ -286,6 +286,12 @@ class KeyMintSecurityLevelInterceptor(
             )
         }
 
+        if (requestedPurpose == KeyPurpose.WRAP_KEY) {
+            return InterceptorUtils.createServiceSpecificErrorReply(
+                KeystoreErrorCode.INCOMPATIBLE_PURPOSE
+            )
+        }
+
         if (requestedPurpose !in keyParams.purpose) {
             SystemLogger.info(
                 "[TX_ID: $txId] Rejecting: purpose $requestedPurpose not in ${keyParams.purpose}"

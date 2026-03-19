@@ -260,14 +260,19 @@ object AttestationBuilder {
             )
         }
 
+        if (params.noAuthRequired == true) {
+            list.add(
+                DERTaggedObject(true, AttestationConstants.TAG_NO_AUTH_REQUIRED, DERNull.INSTANCE)
+            )
+        }
+
         list.addAll(
             listOf(
-                DERTaggedObject(true, AttestationConstants.TAG_NO_AUTH_REQUIRED, DERNull.INSTANCE),
                 DERTaggedObject(
                     true,
                     AttestationConstants.TAG_ORIGIN,
-                    ASN1Integer(0L),
-                ), // KeyOrigin.GENERATED
+                    ASN1Integer((params.origin ?: 0).toLong()),
+                ),
                 DERTaggedObject(
                     true,
                     AttestationConstants.TAG_ROOT_OF_TRUST,
