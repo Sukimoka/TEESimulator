@@ -162,28 +162,39 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
                 data.readTypedObject(KeyDescriptor.CREATOR)
                     ?: return TransactionResult.ContinueAndSkipPost
 
-            if (descriptor.alias != null) {
-                SystemLogger.info("Handling ${transactionNames[code]!!} ${descriptor.alias}")
-            } else {
-                SystemLogger.info(
-                    "Skip ${transactionNames[code]!!} for key [alias, blob, domain, nspace]: [${descriptor.alias}, ${descriptor.blob}, ${descriptor.domain}, ${descriptor.nspace}]"
-                )
-                return TransactionResult.ContinueAndSkipPost
-            }
-            val keyId = KeyIdentifier(callingUid, descriptor.alias)
-
             if (code == DELETE_KEY_TRANSACTION) {
-                val isSoftwareKey =
-                    KeyMintSecurityLevelInterceptor.generatedKeys.containsKey(keyId)
-                KeyMintSecurityLevelInterceptor.cleanupKeyData(keyId)
-                if (isSoftwareKey) {
-                    SystemLogger.info(
-                        "[TX_ID: $txId] Deleted cached keypair ${descriptor.alias}, replying with empty response."
-                    )
-                    return InterceptorUtils.createSuccessReply(writeResultCode = false)
+                // Handle delete by alias (APP domain) or nspace (KEY_ID domain).
+                val keyId =
+                    if (descriptor.alias != null) {
+                        KeyIdentifier(callingUid, descriptor.alias)
+                    } else if (descriptor.domain == Domain.KEY_ID) {
+                        KeyMintSecurityLevelInterceptor.findGeneratedKeyByKeyId(
+                            callingUid, descriptor.nspace
+                        )?.let { info ->
+                            KeyMintSecurityLevelInterceptor.generatedKeys.entries
+                                .find { it.value.nspace == info.nspace && it.key.uid == callingUid }
+                                ?.key
+                        }
+                    } else null
+
+                if (keyId != null) {
+                    val isSoftwareKey =
+                        KeyMintSecurityLevelInterceptor.generatedKeys.containsKey(keyId)
+                    KeyMintSecurityLevelInterceptor.cleanupKeyData(keyId)
+                    if (isSoftwareKey) {
+                        SystemLogger.info(
+                            "[TX_ID: $txId] Deleted cached keypair ${keyId.alias}, replying with empty response."
+                        )
+                        return InterceptorUtils.createSuccessReply(writeResultCode = false)
+                    }
                 }
                 return TransactionResult.ContinueAndSkipPost
             }
+
+            if (descriptor.alias == null) {
+                return TransactionResult.ContinueAndSkipPost
+            }
+            val keyId = KeyIdentifier(callingUid, descriptor.alias)
 
             val response =
                 KeyMintSecurityLevelInterceptor.getGeneratedKeyResponse(keyId)
