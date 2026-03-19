@@ -13,6 +13,8 @@ import android.system.keystore2.*
 import java.security.KeyPair
 import java.security.SecureRandom
 import java.security.cert.Certificate
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import org.matrix.TEESimulator.attestation.AttestationPatcher
 import org.matrix.TEESimulator.attestation.KeyMintAttestation
@@ -224,7 +226,7 @@ class KeyMintSecurityLevelInterceptor(
             when (keyDescriptor.domain) {
                 Domain.KEY_ID -> {
                     val nspace = keyDescriptor.nspace
-                    if (nspace == null || nspace == 0L) null
+                    if (nspace == 0L) null
                     else
                         generatedKeys.entries
                             .filter { it.key.uid == callingUid }
@@ -395,6 +397,7 @@ class KeyMintSecurityLevelInterceptor(
                 SystemLogger.debug(
                     "Handling generateKey ${keyDescriptor.alias}, attestKey=${attestationKey?.alias}"
                 )
+
                 val params = data.createTypedArray(KeyParameter.CREATOR)!!
 
                 // Caller-provided CREATION_DATETIME is not allowed.
@@ -448,56 +451,23 @@ class KeyMintSecurityLevelInterceptor(
                 val parsedParams = KeyMintAttestation(params)
                 val isAttestKeyRequest = parsedParams.isAttestKey()
 
-                // Determine if we need to generate a key based on config or
-                // if it's an attestation request in patch mode.
-                val needsSoftwareGeneration =
+                val forceGenerate =
                     ConfigurationManager.shouldGenerate(callingUid) ||
                         (ConfigurationManager.shouldPatch(callingUid) && isAttestKeyRequest) ||
                         (attestationKey != null &&
                             isAttestationKey(KeyIdentifier(callingUid, attestationKey.alias)))
 
-                if (needsSoftwareGeneration) {
-                    keyDescriptor.nspace = secureRandom.nextLong()
-                    SystemLogger.info(
-                        "Generating software key for ${keyDescriptor.alias}[${keyDescriptor.nspace}]."
+                val isAuto = ConfigurationManager.isAutoMode(callingUid)
+
+                when {
+                    forceGenerate -> doSoftwareGeneration(
+                        callingUid, keyDescriptor, attestationKey, parsedParams, isAttestKeyRequest
                     )
-
-                    // Generate the key pair and certificate chain.
-                    val keyData =
-                        CertificateGenerator.generateAttestedKeyPair(
-                            callingUid,
-                            keyDescriptor.alias,
-                            attestationKey?.alias,
-                            parsedParams,
-                            securityLevel,
-                        ) ?: throw Exception("CertificateGenerator failed to create key pair.")
-
-                    val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
-                    // It is unnecessary but a good practice to clean up possible caches
-                    cleanupKeyData(keyId)
-                    // Store the generated key data.
-                    val response =
-                        buildKeyEntryResponse(
-                            callingUid,
-                            keyData.second,
-                            parsedParams,
-                            keyDescriptor,
-                        )
-                    generatedKeys[keyId] =
-                        GeneratedKeyInfo(
-                            keyData.first,
-                            keyDescriptor.nspace,
-                            response,
-                            parsedParams,
-                        )
-                    if (isAttestKeyRequest) attestationKeys.add(keyId)
-
-                    // Return the metadata of our generated key, skipping the real hardware call.
-                    InterceptorUtils.createTypedObjectReply(response.metadata)
-                } else if (parsedParams.attestationChallenge != null) {
-                    TransactionResult.Continue
-                } else {
-                    TransactionResult.ContinueAndSkipPost
+                    isAuto && !teeFunctional -> raceTeePatch(
+                        callingUid, keyDescriptor, attestationKey, params, parsedParams, isAttestKeyRequest
+                    )
+                    parsedParams.attestationChallenge != null -> TransactionResult.Continue
+                    else -> TransactionResult.ContinueAndSkipPost
                 }
             }
             .getOrElse { e ->
@@ -507,6 +477,120 @@ class KeyMintSecurityLevelInterceptor(
                     else SECURE_HW_COMMUNICATION_FAILED
                 InterceptorUtils.createServiceSpecificErrorReply(code)
             }
+    }
+
+    /** Performs software key generation and caches the result. */
+    private fun doSoftwareGeneration(
+        callingUid: Int,
+        keyDescriptor: KeyDescriptor,
+        attestationKey: KeyDescriptor?,
+        parsedParams: KeyMintAttestation,
+        isAttestKeyRequest: Boolean,
+    ): TransactionResult {
+        keyDescriptor.nspace = secureRandom.nextLong()
+        SystemLogger.info(
+            "Generating software key for ${keyDescriptor.alias}[${keyDescriptor.nspace}]."
+        )
+
+        val keyData =
+            CertificateGenerator.generateAttestedKeyPair(
+                callingUid,
+                keyDescriptor.alias,
+                attestationKey?.alias,
+                parsedParams,
+                securityLevel,
+            ) ?: throw Exception("CertificateGenerator failed to create key pair.")
+
+        val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
+        cleanupKeyData(keyId)
+        val response =
+            buildKeyEntryResponse(callingUid, keyData.second, parsedParams, keyDescriptor)
+        generatedKeys[keyId] =
+            GeneratedKeyInfo(keyData.first, keyDescriptor.nspace, response, parsedParams)
+        if (isAttestKeyRequest) attestationKeys.add(keyId)
+
+        return InterceptorUtils.createTypedObjectReply(response.metadata)
+    }
+
+    /**
+     * Races TEE hardware generation against software generation for AUTO mode when the TEE
+     * status is unknown. The hardware path is attempted concurrently with software generation.
+     * On hardware success, the software future is cancelled and TEE is marked functional.
+     * On hardware failure, the software result is used instead.
+     */
+    private fun raceTeePatch(
+        callingUid: Int,
+        keyDescriptor: KeyDescriptor,
+        attestationKey: KeyDescriptor?,
+        rawParams: Array<KeyParameter>,
+        parsedParams: KeyMintAttestation,
+        isAttestKeyRequest: Boolean,
+    ): TransactionResult {
+        SystemLogger.info("AUTO mode: racing TEE vs software for ${keyDescriptor.alias}")
+
+        val teeDescriptor = KeyDescriptor().apply {
+            domain = keyDescriptor.domain
+            nspace = keyDescriptor.nspace
+            alias = keyDescriptor.alias
+            blob = keyDescriptor.blob
+        }
+        val teeAttestKey =
+            attestationKey?.let {
+                KeyDescriptor().apply {
+                    domain = it.domain
+                    nspace = it.nspace
+                    alias = it.alias
+                    blob = it.blob
+                }
+            }
+
+        val threadA = CompletableFuture.supplyAsync {
+            original.generateKey(teeDescriptor, teeAttestKey, rawParams, 0, byteArrayOf())
+        }
+
+        val swDescriptor = KeyDescriptor().apply {
+            domain = keyDescriptor.domain
+            nspace = secureRandom.nextLong()
+            alias = keyDescriptor.alias
+            blob = keyDescriptor.blob
+        }
+
+        val threadB = CompletableFuture.supplyAsync {
+            doSoftwareGeneration(
+                callingUid, swDescriptor, attestationKey, parsedParams, isAttestKeyRequest
+            )
+        }
+
+        return try {
+            val teeMetadata = threadA.join()
+            threadB.cancel(true)
+            teeFunctional = true
+            SystemLogger.info("AUTO: TEE succeeded for ${keyDescriptor.alias}, marked functional.")
+
+            val originalChain = CertificateHelper.getCertificateChain(teeMetadata)
+            if (originalChain != null && originalChain.size > 1) {
+                val newChain = AttestationPatcher.patchCertificateChain(originalChain, callingUid)
+                val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
+                CertificateHelper.updateCertificateChain(teeMetadata, newChain).getOrThrow()
+                teeMetadata.authorizations =
+                    InterceptorUtils.patchAuthorizations(teeMetadata.authorizations, callingUid)
+                cleanupKeyData(keyId)
+                patchedChains[keyId] = newChain
+            }
+            InterceptorUtils.createTypedObjectReply(teeMetadata)
+        } catch (_: Exception) {
+            SystemLogger.info("AUTO: TEE failed for ${keyDescriptor.alias}, using software result.")
+            try {
+                threadB.join()
+            } catch (e: Exception) {
+                SystemLogger.error("AUTO: both paths failed for ${keyDescriptor.alias}.", e)
+                val code =
+                    if (e.cause is android.os.ServiceSpecificException)
+                        (e.cause as android.os.ServiceSpecificException).errorCode
+                    else SECURE_HW_COMMUNICATION_FAILED
+                InterceptorUtils.createServiceSpecificErrorReply(code)
+            }
+        }
     }
 
     /**
@@ -541,6 +625,9 @@ class KeyMintSecurityLevelInterceptor(
 
     companion object {
         private val secureRandom = SecureRandom()
+
+        /** Once set to true, AUTO mode skips the race and uses PATCH directly. */
+        @Volatile var teeFunctional = false
 
         private const val INVALID_ARGUMENT = 20
         private const val PERMISSION_DENIED = 6

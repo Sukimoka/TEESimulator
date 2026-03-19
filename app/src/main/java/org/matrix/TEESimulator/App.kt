@@ -40,9 +40,10 @@ object App {
             // Initialize and start the appropriate keystore interceptors.
             initializeInterceptors()
 
-            // Load the package configuration.
+            // Load configuration and check TEE status after interceptors are active.
+            // The TEE check key alias is excluded from interception so it goes
+            // directly to real hardware.
             ConfigurationManager.initialize()
-            // Set up the device's boot key and hash, which are crucial for attestation.
             AndroidDeviceUtils.setupBootKeyAndHash()
 
             // Android ships with a stripped-down Bouncy Castle provider under the name "BC".
