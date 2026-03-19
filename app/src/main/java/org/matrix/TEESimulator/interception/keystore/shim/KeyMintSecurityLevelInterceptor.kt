@@ -26,6 +26,7 @@ import org.matrix.TEESimulator.logging.SystemLogger
 import org.matrix.TEESimulator.pki.CertificateGenerator
 import org.matrix.TEESimulator.pki.CertificateHelper
 import org.matrix.TEESimulator.util.AndroidDeviceUtils
+import org.matrix.TEESimulator.util.TeeLatencySimulator
 
 /**
  * Intercepts calls to an `IKeystoreSecurityLevel` service (e.g., TEE or StrongBox). This is where
@@ -501,6 +502,7 @@ class KeyMintSecurityLevelInterceptor(
         parsedParams: KeyMintAttestation,
         isAttestKeyRequest: Boolean,
     ): TransactionResult {
+        val genStartNanos = System.nanoTime()
         keyDescriptor.nspace = secureRandom.nextLong()
         SystemLogger.info(
             "Generating software key for ${keyDescriptor.alias}[${keyDescriptor.nspace}]."
@@ -545,6 +547,9 @@ class KeyMintSecurityLevelInterceptor(
             }
             generatedKeys[keyId] =
                 GeneratedKeyInfo(null, secretKey, keyDescriptor.nspace, response, parsedParams)
+            TeeLatencySimulator.simulateGenerateKeyDelay(
+                parsedParams.algorithm, System.nanoTime() - genStartNanos
+            )
             return InterceptorUtils.createTypedObjectReply(metadata)
         }
 
@@ -563,6 +568,9 @@ class KeyMintSecurityLevelInterceptor(
             GeneratedKeyInfo(keyData.first, null, keyDescriptor.nspace, response, parsedParams)
         if (isAttestKeyRequest) attestationKeys.add(keyId)
 
+        TeeLatencySimulator.simulateGenerateKeyDelay(
+            parsedParams.algorithm, System.nanoTime() - genStartNanos
+        )
         return InterceptorUtils.createTypedObjectReply(response.metadata)
     }
 
