@@ -1,11 +1,16 @@
 package org.matrix.TEESimulator.interception.keystore
 
+import android.hardware.security.keymint.KeyParameter
+import android.hardware.security.keymint.KeyParameterValue
+import android.hardware.security.keymint.Tag
 import android.os.Parcel
 import android.os.Parcelable
 import android.security.KeyStore
 import android.security.keystore.KeystoreResponse
+import android.system.keystore2.Authorization
 import org.matrix.TEESimulator.interception.core.BinderInterceptor
 import org.matrix.TEESimulator.logging.SystemLogger
+import org.matrix.TEESimulator.util.AndroidDeviceUtils
 
 data class KeyIdentifier(val uid: Int, val alias: String)
 
@@ -111,5 +116,66 @@ object InterceptorUtils {
         val exception = runCatching { reply.readException() }.exceptionOrNull()
         if (exception != null) reply.setDataPosition(0)
         return exception != null
+    }
+
+    /**
+     * Creates an `OverrideReply` that writes a `ServiceSpecificException` with the given error
+     * code via EX_SERVICE_SPECIFIC.
+     */
+    fun createServiceSpecificErrorReply(
+        errorCode: Int
+    ): BinderInterceptor.TransactionResult.OverrideReply {
+        val parcel =
+            Parcel.obtain().apply {
+                writeException(android.os.ServiceSpecificException(errorCode))
+            }
+        return BinderInterceptor.TransactionResult.OverrideReply(parcel)
+    }
+
+    /**
+     * Patches the system-level authorization values (OS_PATCHLEVEL, VENDOR_PATCHLEVEL,
+     * BOOT_PATCHLEVEL) in an authorization array to match the configured patch levels for the
+     * given calling UID. Each authorization's original [Authorization.securityLevel] is preserved.
+     *
+     * When a patch level is configured as "no" ([AndroidDeviceUtils.DO_NOT_REPORT]), the original
+     * hardware value is kept as-is.
+     */
+    fun patchAuthorizations(
+        authorizations: Array<Authorization>?,
+        callingUid: Int,
+    ): Array<Authorization>? {
+        if (authorizations == null) return null
+
+        val osPatch = AndroidDeviceUtils.getPatchLevel(callingUid)
+        val vendorPatch = AndroidDeviceUtils.getVendorPatchLevelLong(callingUid)
+        val bootPatch = AndroidDeviceUtils.getBootPatchLevelLong(callingUid)
+
+        return authorizations
+            .map { auth ->
+                val replacement =
+                    when (auth.keyParameter.tag) {
+                        Tag.OS_PATCHLEVEL ->
+                            if (osPatch != AndroidDeviceUtils.DO_NOT_REPORT) osPatch else null
+                        Tag.VENDOR_PATCHLEVEL ->
+                            if (vendorPatch != AndroidDeviceUtils.DO_NOT_REPORT) vendorPatch
+                            else null
+                        Tag.BOOT_PATCHLEVEL ->
+                            if (bootPatch != AndroidDeviceUtils.DO_NOT_REPORT) bootPatch else null
+                        else -> null
+                    }
+                if (replacement != null) {
+                    Authorization().apply {
+                        keyParameter =
+                            KeyParameter().apply {
+                                tag = auth.keyParameter.tag
+                                value = KeyParameterValue.integer(replacement)
+                            }
+                        securityLevel = auth.securityLevel
+                    }
+                } else {
+                    auth
+                }
+            }
+            .toTypedArray()
     }
 }
